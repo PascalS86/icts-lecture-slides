@@ -2,7 +2,7 @@
 from __future__ import print_function
 from __future__ import division
 # from builtins import input
-
+import socket
 import sys
 # import tty
 # import select
@@ -94,17 +94,31 @@ class EasyGoPiGo3():
         self.DEFAULT_SPEED = 300
         self.NO_LIMIT_SPEED = 1000
         self.MOTOR_LEFT = 1
-        self.MOTOR_RIGHT = 1
+        self.MOTOR_RIGHT = 2
         self.LED_LEFT_EYE = 0
         self.LED_RIGHT_EYE = 0
         self.WHEEL_CIRCUMFERENCE = 1
         self.WHEEL_BASE_CIRCUMFERENCE = 1
-        self.set_speed(self.DEFAULT_SPEED)
         self.left_eye_color = (0, 255, 255)
         self.right_eye_color = (0, 255, 255)
         self.use_mutex = use_mutex
-        self.LED_LEFT_BLINKER = 1
-        self.LED_RIGHT_BLINKER = 1
+        self.LED_EYE_LEFT      = 0x02
+        self.LED_EYE_RIGHT     = 0x01
+        self.LED_BLINKER_LEFT  = 0x04
+        self.LED_BLINKER_RIGHT = 0x08
+        self.LED_LEFT_EYE      = self.LED_EYE_LEFT
+        self.LED_RIGHT_EYE     = self.LED_EYE_RIGHT
+        self.LED_LEFT_BLINKER  = self.LED_BLINKER_LEFT
+        self.LED_RIGHT_BLINKER = self.LED_BLINKER_RIGHT
+        self.position_raw = {}
+        self.position_raw2 = {}
+        self.speed_raw = {}
+        self.MOTOR_GEAR_RATIO           = 120 # Motor gear ratio # 220 for Nicole's prototype
+        self.ENCODER_TICKS_PER_ROTATION = 6   # Encoder ticks per motor rotation (number of magnet positions) # 16 for early prototypes
+        self.MOTOR_TICKS_PER_DEGREE =  ((self.MOTOR_GEAR_RATIO * self.ENCODER_TICKS_PER_ROTATION) / 360.0) # encoder ticks per output shaft rotation degree
+        self.current_degree = 0
+        self.set_speed(self.DEFAULT_SPEED)
+
         
     def load_robot_constants(self, config_file_path="/home/pi/Dexter/gpg3_config.json"):
         """
@@ -222,7 +236,11 @@ class EasyGoPiGo3():
                               dps=self.speed)
 
     def set_motor_limits(self,lr, dps):
-        pass
+        self.speed_raw[lr] = dps
+        send_data("speed:"+str(dps))
+        print("set_motor_limits motor"+str(lr) + ":"+str(dps))
+        dps = int(dps * self.MOTOR_TICKS_PER_DEGREE)        
+        send_data("degree:"+str(self.current_degree))
     def get_speed(self):
         """
         Use this method for getting the speed of your `GoPiGo3`_.
@@ -258,10 +276,29 @@ class EasyGoPiGo3():
         self.set_motor_dps(self.MOTOR_LEFT + self.MOTOR_RIGHT, 0)
 
     def set_motor_dps(self, lr, dps):
-        pass
+        dps = int(dps * self.MOTOR_TICKS_PER_DEGREE)
+        print("speed:"+str(dps))
+        send_data("speed:"+str(dps))
+        send_data("degree:"+str(self.current_degree))
+        #pass
 
     def reset_all(self):
-        pass
+           # reset all sensors
+        # self.set_grove_type(self.GROVE_1 + self.GROVE_2, self.GROVE_TYPE.CUSTOM)
+        # self.set_grove_mode(self.GROVE_1 + self.GROVE_2, self.GROVE_INPUT_DIGITAL)
+
+        # Turn off the motors
+        self.set_motor_power(self.MOTOR_LEFT + self.MOTOR_RIGHT, 0)
+
+        # Reset the motor limits
+        self.set_motor_limits(self.MOTOR_LEFT + self.MOTOR_RIGHT, 0)
+
+        # Turn off the servos
+        # self.set_servo(self.SERVO_1 + self.SERVO_2, 0)
+
+        # Turn off the LEDs
+        self.set_led(self.LED_EYE_LEFT + self.LED_EYE_RIGHT + self.LED_BLINKER_LEFT + self.LED_BLINKER_RIGHT, 0, 0, 0)
+        #pass
     def forward(self):
         """
         Move the `GoPiGo3`_ forward.
@@ -270,6 +307,7 @@ class EasyGoPiGo3():
         Default ``speed`` is set to **300** - see :py:meth:`~easygopigo3.EasyGoPiGo3.__init__`.
 
         """
+        self.current_degree = 0
         self.set_motor_dps(self.MOTOR_LEFT + self.MOTOR_RIGHT,
                            self.NO_LIMIT_SPEED)
 
@@ -301,6 +339,13 @@ class EasyGoPiGo3():
         StartPositionLeft = self.get_motor_encoder(self.MOTOR_LEFT)
         StartPositionRight = self.get_motor_encoder(self.MOTOR_RIGHT)
 
+        if(dist < 0):
+            self.set_speed(self.get_speed() * -1)
+        else:
+            self.set_speed(self.get_speed())
+        self.current_degree = 0
+        
+        send_data("degree:"+str(self.current_degree))
         self.set_motor_position(self.MOTOR_LEFT,
                                 (StartPositionLeft + WheelTurnDegrees))
         self.set_motor_position(self.MOTOR_RIGHT,
@@ -316,11 +361,23 @@ class EasyGoPiGo3():
                     break
 
                 time.sleep(0.1)
+            self.stop()
 
     def get_motor_encoder(self, motor):
-        return motor
+        try:
+           self.position_raw2[motor] = int(self.position_raw2[motor] + self.speed_raw[motor])
+           print("motor" + str(motor)+":"+str(self.position_raw2[motor]))
+           #send_data("motor" + str(motor)+":"+str(self.position_raw2[motor]))
+           return self.position_raw2[motor]
+        except:
+            self.position_raw2[motor] = 0
+            #send_data("motor" + str(motor)+":"+str(self.position_raw2[motor]))
+            return 0
+        #pass
     def set_motor_position(self,motor, pos):
-        pass
+        self.position_raw[motor] = int(pos * self.MOTOR_TICKS_PER_DEGREE)
+        print("motor" + str(motor)+":"+str(self.position_raw[motor]))
+              #pass
     def drive_inches(self, dist, blocking=True):
         """
         Move the `GoPiGo3`_ forward / backward for ``dist`` amount of inches.
@@ -379,7 +436,10 @@ class EasyGoPiGo3():
         # get the starting position of each motor
         StartPositionLeft = self.get_motor_encoder(self.MOTOR_LEFT)
         StartPositionRight = self.get_motor_encoder(self.MOTOR_RIGHT)
-
+        
+        self.set_speed(self.get_speed())
+        self.current_degree = degrees
+        send_data("degree:"+str(self.current_degree))
         self.set_motor_position(self.MOTOR_LEFT,
                                 (StartPositionLeft + degrees))
         self.set_motor_position(self.MOTOR_RIGHT,
@@ -395,6 +455,7 @@ class EasyGoPiGo3():
                     i = 0
                     break
                 time.sleep(0.1)
+            self.stop()
         return
 
 
@@ -421,6 +482,9 @@ class EasyGoPiGo3():
              | This causes the robot to rotate in very short circles.
 
         """
+        
+        self.current_degree = 90
+        send_data("degree:"+str(self.current_degree))
         self.set_motor_dps(self.MOTOR_LEFT, self.NO_LIMIT_SPEED)
         self.set_motor_dps(self.MOTOR_RIGHT, 0)
 
@@ -439,6 +503,8 @@ class EasyGoPiGo3():
 
         """
 
+        self.current_degree = 90
+        send_data("degree:"+str(self.current_degree))
         self.set_motor_dps(self.MOTOR_LEFT, self.NO_LIMIT_SPEED)
         self.set_motor_dps(self.MOTOR_RIGHT, self.NO_LIMIT_SPEED * -1)
 
@@ -454,8 +520,8 @@ class EasyGoPiGo3():
              | This causes the robot to rotate in very short circles.
 
         """
-        self.set_motor_dps(self.MOTOR_LEFT, 0)
-        self.set_motor_dps(self.MOTOR_RIGHT, self.NO_LIMIT_SPEED)
+        self.current_degree = -90
+        send_data("degree:"+str(self.current_degree))
 
     def spin_left(self):
         """
@@ -471,8 +537,8 @@ class EasyGoPiGo3():
              You can achieve the same effect by calling ``steer(-100, 100)`` (method :py:meth:`~easygopigo3.EasyGoPiGo3.steer`).
 
         """
-        self.set_motor_dps(self.MOTOR_LEFT, self.NO_LIMIT_SPEED * -1)
-        self.set_motor_dps(self.MOTOR_RIGHT, self.NO_LIMIT_SPEED )
+        self.current_degree = -90
+        send_data("degree:"+str(self.current_degree))
 
     def steer(self, left_percent, right_percent):
         """
@@ -495,6 +561,9 @@ class EasyGoPiGo3():
              Setting both ``left_percent`` and ``right_percent`` to **0** will stop the GoPiGo from moving.
 
         """
+        changeInX = (left_percent / 100) - (right_percent / 100)
+        self.current_degree = math.degrees(math.atan2(0,changeInX))
+        send_data("degree:"+str(self.current_degree))
         self.set_motor_dps(self.MOTOR_LEFT, self.NO_LIMIT_SPEED * left_percent / 100)
         self.set_motor_dps(self.MOTOR_RIGHT, self.NO_LIMIT_SPEED * right_percent / 100)
 
@@ -553,6 +622,12 @@ class EasyGoPiGo3():
         fast_speed = speed_with_direction
         slow_speed = abs((speed_with_direction * slow_target) / fast_target)
         
+        if(speed < 0):
+            self.set_speed(self.get_speed() * -1)
+        else:
+            self.set_speed(self.get_speed())
+        self.current_degree = degrees
+        send_data("degree:"+str(self.current_degree))
         # set the motor speeds
         self.set_motor_limits(MOTOR_FAST, dps = fast_speed)
         self.set_motor_limits(MOTOR_SLOW, dps = slow_speed)
@@ -577,7 +652,7 @@ class EasyGoPiGo3():
         
             # reset to original speed once done
             # if non-blocking, then the user is responsible in resetting the speed
-            self.set_speed(speed)
+            self.stop()
         
         return
 
@@ -695,6 +770,7 @@ class EasyGoPiGo3():
         motor_left_previous = None
         motor_right_previous = None
 
+        self.set_speed(self.get_speed())
         i = 0
         if blocking:
             # Note to self. using target_reached() here didn't work.
@@ -707,11 +783,19 @@ class EasyGoPiGo3():
                     i = 0
                     break
                 time.sleep(0.025)
+                
+            self.stop()
 
-    def set_motor_power(self, a,b):
-        pass
-    def offset_motor_encoder(self, a, b):
-        pass
+    def set_motor_power(self, port, power):
+        if(power > 127):
+            power = 127
+        if(power < -128):
+            power = -128
+        self.set_speed(0)
+        #pass
+    def offset_motor_encoder(self, port, offset):
+        offset = int(offset * self.MOTOR_TICKS_PER_DEGREE)
+        #pass
     def read_encoders(self):
         """
         Reads the encoders' position in degrees. 360 degrees represent 1 full rotation (or 360 degrees) of a wheel.
@@ -794,6 +878,9 @@ class EasyGoPiGo3():
         StartPositionLeft = self.get_motor_encoder(self.MOTOR_LEFT)
         StartPositionRight = self.get_motor_encoder(self.MOTOR_RIGHT)
 
+        self.set_speed(self.get_speed())
+        self.current_degree = degrees
+        send_data("degree:"+str(self.current_degree))
         # Set each motor target
         self.set_motor_position(self.MOTOR_LEFT,
                                 (StartPositionLeft + WheelTurnDegrees))
@@ -810,6 +897,7 @@ class EasyGoPiGo3():
                     i = 0
                     break
                 time.sleep(0.1)
+            self.stop()
 
 
     def blinker_on(self, id):
@@ -822,8 +910,11 @@ class EasyGoPiGo3():
         """
         if id == 1 or id == "left":
             self.set_led(self.LED_LEFT_BLINKER, 255)
+            send_data("blinker1:1")
         if id == 0 or id == "right":
             self.set_led(self.LED_RIGHT_BLINKER, 255)
+            send_data("blinker2:1")
+
 
     def blinker_off(self, id):
         """
@@ -834,8 +925,10 @@ class EasyGoPiGo3():
         """
         if id == 1 or id == "left":
             self.set_led(self.LED_LEFT_BLINKER, 0)
+            send_data("blinker1:0")
         if id == 0 or id == "right":
             self.set_led(self.LED_RIGHT_BLINKER, 0)
+            send_data("blinker2:0")
 
 
     def led_on(self, id):
@@ -921,8 +1014,27 @@ class EasyGoPiGo3():
                      self.left_eye_color[1],
                      self.left_eye_color[2],
                     )
-    def set_led(self, eye, color1=0, color2=0, color3=0):
-        pass
+    def set_led(self, led, red, green = 0, blue = 0):
+        
+        if led < 0 or led > 255:
+            return
+
+        if red > 255:
+            red = 255
+        if green > 255:
+            green = 255
+        if blue > 255:
+            blue = 255
+
+        if red < 0:
+            red = 0
+        if green < 0:
+            green = 0
+        if blue < 0:
+            blue = 0
+        
+        send_data("Led"+str(led)+":"+str(red)+","+str(green)+","+str(blue))
+            #pass
 
     def open_right_eye(self):
         """
@@ -1302,3 +1414,13 @@ def DHTSensor(gpg=None, sensor_type=0, use_mutex=False):
 
    
     return gpg.init_dht_sensor(sensor_type=sensor_type)
+
+def send_data(data):
+    try:
+        s = socket.socket()                        
+        # connect to the server on local computer 
+        s.connect(('localhost', 1755))
+        s.send(data.encode())
+        s.close()
+    except:
+        pass
