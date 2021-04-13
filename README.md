@@ -1,4 +1,4 @@
-# ICTS-Slides
+# ICTS-Slides 
 
 In this repo you'll find the following:
 * GoPiGo3 API
